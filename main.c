@@ -14,6 +14,7 @@
 
 #define MORI_FILE_NAME "mori-mori"
 #define MORI_VERSION 0
+#define MORI_FULL_VERSION "0.1.0"
 
 #define list_remove(l, index)                                \
 do {                                                         \
@@ -79,6 +80,7 @@ bool get_v0_mori_tree_from_bytes(byte_t **bytes, size_t *bytes_len, Mori_Tree *t
   // printf("[DEBUG] Loaded name length '%zu' from %zu bytes\n", (size_t)name_len, sizeof(uint32_t));
   tree->name = (String_View){ .count = (size_t)name_len, .data = (const char *)*bytes };
   *bytes += name_len;
+  nob_log(INFO, "Loading manga: '"SV_Fmt"'...", SV_Arg(tree->name));
   // printf("[DEBUG] Loading manga: '"SV_Fmt"'...\n", SV_Arg(tree->name));
 
   for (size_t i = 0; i < sizeof(uint32_t); ++i) {
@@ -106,6 +108,7 @@ bool get_v0_mori_tree_from_bytes(byte_t **bytes, size_t *bytes_len, Mori_Tree *t
   }
   uint32_t chapters_count = *(uint32_t *)num_buf;
   tree->chapter = chapters_count;
+  nob_log(INFO, "    Chapter: %zu", tree->chapter);
 
   for (size_t i = 0; i < sizeof(uint32_t); ++i) {
     if (*bytes_len == 0) {
@@ -116,6 +119,7 @@ bool get_v0_mori_tree_from_bytes(byte_t **bytes, size_t *bytes_len, Mori_Tree *t
   }
   uint32_t volumes_count = *(uint32_t *)num_buf;
   tree->volume = volumes_count;
+  nob_log(INFO, "    Volume: %zu", tree->volume);
 
   return true;
 }
@@ -268,7 +272,6 @@ void display_tree_full(size_t i, const char *prefix) {
 }
 
 void display_mori_tree_short_list() {
-  ansi_term_clear_screen();
   ansi_term_printn("╓─<Your Manga Forest>");
   for (size_t i = 0; i < mori.count; ++i) {
     ansi_term_printfn("╟─ Index %zu", i);
@@ -279,7 +282,6 @@ void display_mori_tree_short_list() {
 }
 
 void display_mori_tree_full_list() {
-  ansi_term_clear_screen();
   ansi_term_printn("╓─<Your Manga Forest>");
   for (size_t i = 0; i < mori.count; ++i) {
     ansi_term_printfn("╟─ Index %zu", i);
@@ -295,13 +297,14 @@ Nob_Cmd cmd = {0};
 void display_actions_menu() {
   ansi_term_printn("╓─Actions:");
   ansi_term_printn("║ ╞ l - Lists all saved items");
+  ansi_term_printn("║ ╞ s - Search for an item by their name");
   ansi_term_printn("║ ╞ c - Create new item");
   ansi_term_printn("║ ╞ d - Delete an existing item");
   ansi_term_printn("║ ╞ e - Edit existing item");
   ansi_term_printn("║ ╞ x - Copy url of item or the name if the url is missing");
   ansi_term_printn("║ ╞ i - Get full info of an item");
   ansi_term_printn("║ ╘ q - Quit out of program");
-  printf(          "╙─\x1b[32m森\x1b[0m> ");
+  printf(          "╙──\x1b[32m森\x1b[0m> ");
   flush();
 }
 
@@ -311,6 +314,8 @@ bool handle_action(String_Builder *sb, char action) {
     return true;
 
     case 'd': {
+      ansi_term_clear_screen();
+
       size_t i = 0;
       if (!read_index_from_stdin("Delete_Index =", &i)) break;
 
@@ -325,8 +330,10 @@ bool handle_action(String_Builder *sb, char action) {
     } break;
 
     case 'x': {
+      ansi_term_clear_screen();
+
       size_t i = 0;
-      if (!read_index_from_stdin("Index =", &i)) break;
+      if (!read_index_from_stdin("Copy_Index =", &i)) break;
 
       if (mori.count <= i) {
 	nob_log(ERROR, "OutOfBounds: Trying to access index %zu in list of length %zu", i, mori.count);
@@ -355,6 +362,8 @@ bool handle_action(String_Builder *sb, char action) {
     } break;
 
     case 'c': {
+      ansi_term_clear_screen();
+
       Mori_Tree tree = {0};
       String_View trimmed = {0};
       const size_t cap = 1024*2;
@@ -400,8 +409,10 @@ bool handle_action(String_Builder *sb, char action) {
     } break;
 
     case 'e': {
+      ansi_term_clear_screen();
+
       size_t i = 0;
-      if (!read_index_from_stdin("Index =", &i)) break;
+      if (!read_index_from_stdin("Edit_Index =", &i)) break;
       if (mori.count <= i) {
 	nob_log(ERROR, "OutOfBounds: Trying to access index %zu in list of length %zu", i, mori.count);
 	break;
@@ -542,10 +553,13 @@ bool handle_action(String_Builder *sb, char action) {
     } break;
 
     case 'l': {
+      ansi_term_clear_screen();
       display_mori_tree_short_list();
     } break;
 
     case 'i': {
+      ansi_term_clear_screen();
+
       size_t i = 0;
       if (!read_index_from_stdin("Index =", &i)) break;
       if (mori.count <= i) {
@@ -556,16 +570,59 @@ bool handle_action(String_Builder *sb, char action) {
       display_tree_full(i, NULL);
     } break;
 
+  case 's': {
+    ansi_term_clear_screen();
+
+    String_View sv = {0};
+
+    if (!ansi_term_read_line(&sv)) {
+      break;
+    }
+    size_t save_point = temp_save();
+    const char *search = ntemp_sv_ascii_to_lower(sv_trim(sv));
+    size_t found = 0;
+    ansi_term_printn("╓<Search_Results>");
+    for (size_t i = 0; i < mori.count; ++i) {
+      Mori_Tree *tree = mori.items + i;
+      const char *lowered_name = ntemp_sv_ascii_to_lower(tree->name);
+      if (zstr_includes_zstr(lowered_name, search)) {
+	ansi_term_printfn("╟──◈ Index %zu", i);
+	display_tree_short(i, "║      ");
+	found++;
+      }
+    }
+
+    // Free memory
+    free((void*)sv.data);
+    temp_rewind(save_point);
+
+    ansi_term_printfn("╙ Mori_Tree found[%zu];", found);
+  } break;
+
   case ' ':
   case '\t':
   case '\n':
     break;
 
     default: {
-      if (action != '\n') printf("Unknown command: '%c'\n", action);
+      if (action != '\n') ansi_term_printfn("Unknown command: '%c'", action);
     } break;
   }
+
+  flush();
+  ansi_term_read_line(NULL);
+
   return false;
+}
+
+void load_morimori_file(String_Builder *sb, const char *file_path) {
+  nob_log(INFO, "Checking for morimori file '%s'...", file_path);
+  if (!nob_file_exists(file_path)) {
+    write_entire_file(file_path, mori_header, MORI_HEADER_SIZE);
+    nob_log(INFO, "Created base morimori file!");
+  } else {
+    read_morimori_file(sb, file_path);
+  }
 }
 
 int main(int argc, char **argv) {
@@ -575,22 +632,23 @@ int main(int argc, char **argv) {
 
   String_Builder sb = {0};
   const char *morimori_file_path = get_morimori_file_path();
-  nob_log(INFO, "Checking for morimori file '%s'...", morimori_file_path);
-  if (!nob_file_exists(morimori_file_path)) {
-    write_entire_file(morimori_file_path, mori_header, MORI_HEADER_SIZE);
-    nob_log(INFO, "Created base morimori file!");
-  } else {
-    read_morimori_file(&sb, morimori_file_path);
-  }
 
   if (argc > 0) {
     char *arg = shift(argv, argc);
+    if (strcmp(arg, "version") == 0) {
+      printf("Program: v"MORI_FULL_VERSION"\n");
+      printf("mori-mori: 0x%02x\n", MORI_VERSION);
+      return 0;
+    }
+
     if (strcmp(arg, "list") == 0) {
+      load_morimori_file(&sb, morimori_file_path);
       display_mori_tree_short_list();
       return 0;
     }
 
     if (strcmp(arg, "list-full") == 0) {
+      load_morimori_file(&sb, morimori_file_path);
       display_mori_tree_full_list();
       return 0;
     }
@@ -601,7 +659,8 @@ int main(int argc, char **argv) {
 	printf("Usage: mori search <search-terms...>\n");
 	return 1;
       }
-      ansi_term_start();
+
+      load_morimori_file(&sb, morimori_file_path);
 
       String_Builder search_sb = {0};
       while (argc > 0) {
@@ -626,46 +685,44 @@ int main(int argc, char **argv) {
       ansi_term_printfn("╙ Mori_Tree found[%zu];", found);
       flush();
 
-      ansi_term_read_line(NULL);
-
-      ansi_term_end();
-
       return 0;
     }
   }
 
+  load_morimori_file(&sb, morimori_file_path);
   cmd.items = malloc(GLOBAL_CMD_INIT_CAP);
   cmd.capacity = GLOBAL_CMD_INIT_CAP;
 
-  printf(ANSI_TERM_ENABLE_ALT_BUFFER ANSI_TERM_MOVE_CURSOR_TO_HOME);
-  printf(ANSI_TERM_CLEAR_ENTIRE_SCREEN);
+  ansi_term_start();
 
-
-
-  bool quit = false;
   char action = 0;
   int ch;
-  while (!quit) {
-    printf(ANSI_TERM_MOVE_CURSOR_TO_HOME);
-    printf(ANSI_TERM_CLEAR_FROM_CURSOR_TO_SCREEN_END);
+  while (true) {
+    ansi_term_clear_screen();
 
     display_actions_menu();
     action = 0;
 
     while (action == 0 || action == ' ' || action == '\t' || action == '\n') {
-      ch = getchar();
-      if (ch == EOF) {
+      String_View sv = {0};
+      if (!ansi_term_read_line(&sv)) {
 	printf(ANSI_TERM_DISABLE_ALT_BUFFER);
+	flush();
 	return 1;
       }
-      action = (char) ch;
+
+      String_View trimmed = sv_trim_left(sv);
+      if (trimmed.count == 0) {
+	action = 0;
+	continue;
+      }
+      action = trimmed.data[0];
     }
 
-    quit = handle_action(&sb, action);
-    if (!quit) ansi_term_read(NULL);
+    if (handle_action(&sb, action)) break;
   }
 
-  printf(ANSI_TERM_DISABLE_ALT_BUFFER);
+  ansi_term_end();
 
   nob_log(INFO, "Saving morimori file...");
   if (write_morimori_file(morimori_file_path)) {

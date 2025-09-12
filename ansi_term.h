@@ -44,14 +44,18 @@ bool ansi_term_read_line(Nob_String_View *read_data);
 
 #ifdef ANSI_TERM_IMPLEMENTATION
 
+static bool ansi_term_alt_buffer_enabled = false;
+
 static inline void ansi_term_start() {
   printf(ANSI_TERM_ENABLE_ALT_BUFFER ANSI_TERM_CLEAR_ENTIRE_SCREEN ANSI_TERM_MOVE_CURSOR_TO_HOME);
   fflush(stdout);
+  ansi_term_alt_buffer_enabled = true;
 }
 
 static inline void ansi_term_end() {
   printf(ANSI_TERM_DISABLE_ALT_BUFFER);
   fflush(stdout);
+  ansi_term_alt_buffer_enabled = false;
 }
 
 static inline void ansi_term_clear_screen() {
@@ -63,11 +67,13 @@ void ansi_term_printfn(const char *fmt, ...) {
   va_start(args, fmt);
   vfprintf(stdout, fmt, args);
   va_end(args);
-  printf("\x1b[1E");
+  if (ansi_term_alt_buffer_enabled) printf("\x1b[1E");
+  else printf("\n");
 }
 
 static inline void ansi_term_printn(const char *message) {
-  printf("%s\x1b[1E", message);
+  if (ansi_term_alt_buffer_enabled) printf("%s\x1b[1E", message);
+  else printf("%s\n", message);
 }
 
 void ansi_term_move_cursor(int x, int y) {
