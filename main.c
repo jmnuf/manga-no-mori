@@ -506,12 +506,15 @@ bool handle_action(String_Builder *sb, char action) {
       size_t save_point = nob_temp_save();
       String_View read_data = {0}, trimmed = {0};
       char *last_error = NULL;
-      while (true) {
+      bool is_editing = true;
+      while (is_editing) {
 	ansi_term_clear_screen();
 
-	if (last_error) printf("ERROR: %s", last_error);
+	if (last_error) {
+	  ansi_term_printfn("ERROR: %s", last_error);
+	  last_error = NULL;
+	}
 	nob_temp_rewind(save_point);
-	last_error = NULL;
 	if (read_data.data) {
 	  free((void*)read_data.data);
 	  read_data.data = NULL;
@@ -534,9 +537,9 @@ bool handle_action(String_Builder *sb, char action) {
 	free((void*)read_data.data);
 	read_data.data = NULL; read_data.count = 0;
 
-	if (strcmp(field, "quit") == 0 || strcmp(field, "q") == 0) {
-	  nob_temp_rewind(save_point);
-	  break;
+	if ((strcmp(field, "quit") == 0) || (strcmp(field, "q") == 0)) {
+	  is_editing = false;
+	  continue;
 	}
 
 	if (strcmp(field, "name") == 0) {
@@ -650,6 +653,7 @@ bool handle_action(String_Builder *sb, char action) {
 
 	last_error = nob_temp_sprintf("Unknown field: %s", field);
       }
+      nob_temp_rewind(save_point);
       
     } break;
 

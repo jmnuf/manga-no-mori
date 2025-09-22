@@ -35,6 +35,7 @@ const char *ntemp_sv_ascii_to_lower(Nob_String_View sv) {
     }
     zstr[i] = c;
   }
+  zstr[sv.count] = 0;
 
   return zstr;
 }
