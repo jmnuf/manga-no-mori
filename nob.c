@@ -36,6 +36,7 @@ bool build_if_needed(Cmd *cmd, Comp_Unit *unit) {
     for (size_t i = 0; i < unit->input_paths_count; ++i) {
       nob_cc_inputs(cmd, unit->input_paths[i]);
     }
+    nob_cmd_append(cmd, "-ggdb");
     unit->input_paths_count = 0;
     return cmd_run(cmd);
   }
