@@ -31,8 +31,20 @@ do {                                                         \
 typedef unsigned char byte_t;
 
 typedef struct {
-  Nob_String_View name;
-  Nob_String_View url;
+  String_Builder *buffer;
+  size_t index;
+  size_t length;
+} Buffered_String_View;
+
+#define BufSV_Fmt      "%.*s"
+#define BufSV_Arg(bsv) (int) (bsv).length, ((bsv).buffer->items + (bsv).index)
+#define BufSV_Arg_Clamp(bsv, max) (int) ((bsv).length > (max) ? (max) : (bsv).length), ((bsv).buffer->items + (bsv).index)
+
+#define bufsv_to_sv(bsv) nob_sv_from_parts((bsv).buffer->items + (bsv).index, (bsv).length)
+
+typedef struct {
+  Buffered_String_View name;
+  Buffered_String_View url;
   union {
     uint32_t chapter;
     char chapter_bytes[sizeof(uint32_t)];
@@ -72,21 +84,24 @@ bool get_v0_mori_tree_from_bytes(String_Builder *buffer, size_t *offset, Mori_Tr
   if (bytes_len == 0) return false;
 
   union {
-    char     buf[sizeof(uint32_t)];
+    char buf[sizeof(uint32_t)];
     uint32_t val;
   } num;
   num.val = 0;
 
-  byte_t *start = mori.buffer.items + (*offset);
-  byte_t *bytes = start;
+  byte_t *bytes = buffer->items + *offset;
   for (size_t i = 0; i < sizeof(uint32_t); ++i) {
     if (bytes_len == 0) {
       nob_log(ERROR, "Malformed Mori Tree: Expected name length as a ui32 at the start of a mori_tree");
       *errored = true;
       return false;
     }
-    num.buf[i] = shift(bytes, bytes_len);
+    num.buf[i] = buffer->items[(*offset) + i];
+    bytes_len--;
   }
+  memcpy(buffer->items + (*offset), buffer->items + (*offset + sizeof(uint32_t)), bytes_len);
+  buffer->count -= sizeof(uint32_t);
+
   uint32_t name_len = num.val;
   if (bytes_len == 0 || bytes_len < name_len) {
     nob_log(ERROR, "Malformed Mori Tree: Not enough data exists in file to read name");
@@ -94,10 +109,10 @@ bool get_v0_mori_tree_from_bytes(String_Builder *buffer, size_t *offset, Mori_Tr
     return false;
   }
   if (name_len == 0) return false;
-  tree->name = sv_trim((String_View){ .count = (size_t)name_len, .data = (const char *)bytes });
-  bytes += name_len;
+  tree->name = (Buffered_String_View) { .buffer = buffer, .index = *offset, .length = (size_t)name_len };
+  *offset += name_len;
   bytes_len -= name_len;
-  nob_log(INFO, "Loading manga: '"SV_Fmt"'...", SV_Arg(tree->name));
+  nob_log(INFO, "Loading manga: '"BufSV_Fmt"'...", BufSV_Arg(tree->name));
 
   num.val = 0;
   for (size_t i = 0; i < sizeof(uint32_t); ++i) {
@@ -106,16 +121,20 @@ bool get_v0_mori_tree_from_bytes(String_Builder *buffer, size_t *offset, Mori_Tr
       *errored = true;
       return false;
     }
-    num.buf[i] = shift(bytes, bytes_len);
+    num.buf[i] = buffer->items[(*offset) + i];
+    bytes_len--;
   }
+  memcpy(buffer->items + (*offset), buffer->items + (*offset + sizeof(uint32_t)), bytes_len);
+  buffer->count -= sizeof(uint32_t);
+
   uint32_t url_len = num.val;
   if (bytes_len == 0 || bytes_len < name_len) {
     nob_log(ERROR, "Malformed Mori Tree: Not enough data exists in file to read url");
     *errored = true;
     return false;
   }
-  tree->url = sv_trim((String_View){ .count = (size_t)url_len, .data = (const char *)bytes });
-  bytes += url_len;
+  tree->url = (Buffered_String_View) { .buffer = buffer, .index = *offset, .length = (size_t)url_len };
+  *offset += url_len;
   bytes_len -= url_len;
 
 
@@ -126,8 +145,12 @@ bool get_v0_mori_tree_from_bytes(String_Builder *buffer, size_t *offset, Mori_Tr
       *errored = true;
       return false;
     }
-    num.buf[i] = shift(bytes, bytes_len);
+    num.buf[i] = buffer->items[(*offset) + i];
+    bytes_len--;
   }
+  memcpy(buffer->items + (*offset), buffer->items + (*offset + sizeof(uint32_t)), bytes_len);
+  buffer->count -= sizeof(uint32_t);
+
   uint32_t chapters_count = num.val;
   tree->chapter = chapters_count;
   nob_log(INFO, "    Chapter: %zu", tree->chapter);
@@ -139,14 +162,15 @@ bool get_v0_mori_tree_from_bytes(String_Builder *buffer, size_t *offset, Mori_Tr
       *errored = true;
       return false;
     }
-    num.buf[i] = shift(bytes, bytes_len);
+    num.buf[i] = buffer->items[(*offset) + i];
+    bytes_len--;
   }
+  memcpy(buffer->items + (*offset), buffer->items + (*offset + sizeof(uint32_t)), bytes_len);
+  buffer->count -= sizeof(uint32_t);
+
   uint32_t volumes_count = num.val;
   tree->volume = volumes_count;
   nob_log(INFO, "    Volume: %zu", tree->volume);
-
-  size_t diff = bytes - start;
-  *offset += diff;
 
   return true;
 }
@@ -193,7 +217,7 @@ bool read_morimori_file(String_Builder *sb, const char *morimori_file_path) {
 	if (errored) nob_log(NOB_ERROR, "Failed to read mori tree bytes");
 	return !errored;
       }
-      if (tree.name.count) da_append(&mori, tree);
+      if (tree.name.length) da_append(&mori, tree);
     }
     return true;
 
@@ -214,15 +238,15 @@ bool write_morimori_file(const char *file_path) {
     char *nbytes = NULL;
     uint32_t value = 0;
 
-    value = (uint32_t)it->name.count;
+    value = (uint32_t)it->name.length;
     nbytes = (char*)&value;
     sb_append_buf(&content_sb, nbytes, sizeof(uint32_t));
-    if (it->name.count > 0) sb_append_buf(&content_sb, it->name.data, it->name.count);
+    if (it->name.length > 0) sb_append_buf(&content_sb, it->name.buffer->items + it->name.index, it->name.length);
 
-    value = (uint32_t)it->url.count;
+    value = (uint32_t)it->url.length;
     nbytes = (char*)&value;
     sb_append_buf(&content_sb, nbytes, sizeof(uint32_t));
-    if (it->url.count > 0) sb_append_buf(&content_sb, it->url.data, it->url.count);
+    if (it->url.length > 0) sb_append_buf(&content_sb, it->url.buffer->items + it->url.index, it->url.length);
 
     sb_append_buf(&content_sb, it->chapter_bytes, sizeof(uint32_t));
 
@@ -266,11 +290,17 @@ bool read_index_from_stdin(const char *prompt, size_t *value) {
 
 void display_tree_short(size_t i, const char *prefix) {
   Mori_Tree *tree = mori.items + i;
+  String_View name = bufsv_to_sv(tree->name);
+  String_View url = bufsv_to_sv(tree->url);
 
   if (!prefix) {
     ansi_term_printfn("Mori_Tree :: struct {");
     ansi_term_printfn("  .Index   = %zu;", i);
-    ansi_term_printfn("  .Name    = \""SV_Fmt"\";", SV_Arg(tree->name));
+    if (tree->name.length > 25) {
+      ansi_term_printfn("  .Name    = \"%.*s...\";", (int)name.count, name.data);
+    } else {
+      ansi_term_printfn("  .Name    = \""SV_Fmt"\";", SV_Arg(name));
+    }
     ansi_term_printfn("  .Chapter = %zu;", tree->chapter);
     ansi_term_printfn("}");
     return;
@@ -278,7 +308,11 @@ void display_tree_short(size_t i, const char *prefix) {
 
   ansi_term_printfn("%sMori_Tree :: struct {", prefix);
   ansi_term_printfn("%s  .Index   = %zu;", prefix, i);
-  ansi_term_printfn("%s  .Name    = \""SV_Fmt"\";", prefix, SV_Arg(tree->name));
+    if (tree->name.length > 25) {
+      ansi_term_printfn("%s  .Name    = \"%.*s...\";", prefix, (int)name.count, name.data);
+    } else {
+      ansi_term_printfn("%s  .Name    = \""SV_Fmt"\";", prefix, SV_Arg(name));
+    }
   ansi_term_printfn("%s  .Chapter = %zu;", prefix, tree->chapter);
   ansi_term_printfn("%s}", prefix);
 }
@@ -289,8 +323,12 @@ void display_tree_full(size_t i, const char *prefix) {
   if (!prefix) {
     ansi_term_printfn("Mori_Tree :: struct {");
     ansi_term_printfn("  .Index   = %zu;", i);
-    ansi_term_printfn("  .Name    = \""SV_Fmt"\";", SV_Arg(tree->name));
-    ansi_term_printfn("  .Url     = \""SV_Fmt"\";", SV_Arg(tree->url));
+    ansi_term_printfn("  .Name    = \""BufSV_Fmt"\";", BufSV_Arg(tree->name));
+    if (tree->url.length == 0 || *(tree->url.buffer->items + tree->url.index) == 0) {
+      ansi_term_printn("  .Url     = None;");
+    } else {
+      ansi_term_printfn("  .Url     = \""BufSV_Fmt"\";", BufSV_Arg(tree->url));
+    }
     ansi_term_printfn("  .Chapter = %zu;", tree->chapter);
     ansi_term_printfn("  .Volume  = %zu;", tree->volume);
     ansi_term_printfn("}");
@@ -299,8 +337,12 @@ void display_tree_full(size_t i, const char *prefix) {
 
   ansi_term_printfn("%sMori_Tree :: struct {", prefix);
   ansi_term_printfn("%s  .Index   = %zu;", prefix, i);
-  ansi_term_printfn("%s  .Name    = \""SV_Fmt"\";", prefix, SV_Arg(tree->name));
-  ansi_term_printfn("%s  .Url     = \""SV_Fmt"\";", prefix, SV_Arg(tree->url));
+  ansi_term_printfn("%s  .Name    = \""BufSV_Fmt"\";", prefix, BufSV_Arg(tree->name));
+    if (tree->url.length == 0 || *(tree->url.buffer->items + tree->url.index) == 0) {
+      ansi_term_printfn("%s  .Url     = None;", prefix);
+    } else {
+      ansi_term_printfn("%s  .Url     = \""BufSV_Fmt"\";", prefix, BufSV_Arg(tree->url));
+    }
   ansi_term_printfn("%s  .Chapter = %zu;", prefix, tree->chapter);
   ansi_term_printfn("%s  .Volume  = %zu;", prefix, tree->volume);
   ansi_term_printfn("%s}", prefix);
@@ -378,21 +420,21 @@ bool handle_action(String_Builder *sb, char action) {
       Mori_Tree *tree = mori.items + i;
       size_t save_point = nob_temp_save();
       bool ok, url;
-      if (tree->url.count) {
+      if (tree->url.length) {
 	url = true;
-	cmd_append(&cmd, "wl-copy", nob_temp_sprintf(SV_Fmt, SV_Arg(tree->url)));
+	cmd_append(&cmd, "wl-copy", nob_temp_sprintf(BufSV_Fmt, BufSV_Arg(tree->url)));
 	ok = cmd_run(&cmd);
       } else {
 	url = false;
-	cmd_append(&cmd, "wl-copy", nob_temp_sprintf(SV_Fmt, SV_Arg(tree->name)));
+	cmd_append(&cmd, "wl-copy", nob_temp_sprintf(BufSV_Fmt, BufSV_Arg(tree->name)));
 	ok = cmd_run(&cmd);
       }
       nob_temp_rewind(save_point);
 
       if (ok) {
-	nob_log(INFO, "Copied %s for "SV_Fmt, url ? "url" : "name", SV_Arg(tree->name));
+	nob_log(INFO, "Copied %s for "BufSV_Fmt, url ? "url" : "name", BufSV_Arg(tree->name));
       } else {
-	nob_log(ERROR, "Failed to copy %s for "SV_Fmt, url ? "url" : "name", SV_Arg(tree->name));
+	nob_log(ERROR, "Failed to copy %s for "BufSV_Fmt, url ? "url" : "name", BufSV_Arg(tree->name));
       }
     } break;
 
@@ -412,22 +454,18 @@ bool handle_action(String_Builder *sb, char action) {
 	break;
       }
       trimmed = sv_trim((String_View) { .count = n, .data = buf });
+      size_t buffer_index = sb->count;
       sb_append_buf(sb, trimmed.data, trimmed.count);
-      tree.name = sv_trim((String_View) {
-	.count = trimmed.count,
-	.data = sb->items + (sb->count - trimmed.count),
-      });
+      tree.name = (Buffered_String_View) { .buffer = sb, .index = buffer_index, .length = trimmed.count, };
 
       printf("Url :: ");
       flush();
       n = read(STDIN_FILENO, buf, cap) - 1;
       if (n > 0) {
 	trimmed = sv_trim((String_View) { .count = n, .data = buf });
+	buffer_index = sb->count;
 	sb_append_buf(sb, trimmed.data, trimmed.count);
-	tree.url = sv_trim((String_View) {
-	  .count = trimmed.count,
-	  .data = sb->items + (sb->count - trimmed.count),
-	});
+	tree.url = (Buffered_String_View) { .buffer = sb, .index = buffer_index, .length = trimmed.count, };
       }
 
       printf("Chapter :: ");
@@ -510,8 +548,18 @@ bool handle_action(String_Builder *sb, char action) {
 	  trimmed = sv_trim(read_data);
 
 	  if (trimmed.count) {
-	    sb_append_buf(sb, trimmed.data, trimmed.count);
-	    tree->name = sv_from_parts(sb->items + (sb->count - trimmed.count), trimmed.count);
+	    if (trimmed.count <= tree->name.length) {
+	      for (size_t i = 0; i < trimmed.count; ++i) {
+		tree->name.buffer->items[tree->name.index + i] = trimmed.data[i];
+	      }
+	      for (size_t i = trimmed.count; i < tree->name.length; ++i) {
+		tree->name.buffer->items[tree->name.index + i] = 0;
+	      }
+	    } else {
+	      size_t buffer_index = sb->count;
+	      sb_append_buf(sb, trimmed.data, trimmed.count);
+	      tree->name = (Buffered_String_View){ .buffer = sb, .index = buffer_index, .length = trimmed.count };
+	    }
 	  }
 
 	  continue;
@@ -528,10 +576,20 @@ bool handle_action(String_Builder *sb, char action) {
 
 	  trimmed = sv_trim(read_data);
 	  if (trimmed.count) {
-	    sb_append_buf(sb, trimmed.data, trimmed.count);
-	    tree->url = sv_from_parts(sb->items + (sb->count - trimmed.count), trimmed.count);
-	  } else {
-	    tree->url.count = 0;
+	    if (trimmed.count <= tree->url.length) {
+	      for (size_t i = 0; i < trimmed.count; ++i) {
+		tree->url.buffer->items[tree->url.index + i] = trimmed.data[i];
+	      }
+	      for (size_t i = trimmed.count; i < tree->url.length; ++i) {
+		tree->url.buffer->items[tree->url.index + i] = 0;
+	      }
+	    } else {
+	      size_t buffer_index = sb->count;
+	      sb_append_buf(sb, trimmed.data, trimmed.count);
+	      tree->url = (Buffered_String_View){ .buffer = sb, .index = buffer_index, .length = trimmed.count };
+	    }
+	  } else if (tree->url.length > 0) {
+	    memset(tree->url.buffer->items + tree->url.index, 0, tree->url.length);
 	  }
 
 	  continue;
@@ -625,7 +683,7 @@ bool handle_action(String_Builder *sb, char action) {
     ansi_term_printn("╓<Search_Results>");
     for (size_t i = 0; i < mori.count; ++i) {
       Mori_Tree *tree = mori.items + i;
-      const char *lowered_name = ntemp_sv_ascii_to_lower(tree->name);
+      const char *lowered_name = ntemp_sv_ascii_to_lower(bufsv_to_sv(tree->name));
       if (zstr_includes_zstr(lowered_name, search)) {
 	ansi_term_printfn("╟──◈ Index %zu", i);
 	display_tree_short(i, "║      ");
@@ -671,7 +729,7 @@ bool load_morimori_file(String_Builder *sb, const char *file_path) {
 int main(int argc, char **argv) {
   shift(argv, argc);
 
-  // nob_minimal_log_level = NOB_WARNING;
+  nob_minimal_log_level = NOB_WARNING;
 
   const char *morimori_file_path = get_morimori_file_path();
   printf("Mori_Header :: ");
@@ -719,7 +777,7 @@ int main(int argc, char **argv) {
       ansi_term_printn("╓<Search_Results>");
       for (size_t i = 0; i < mori.count; ++i) {
 	Mori_Tree *tree = mori.items + i;
-	const char *lowered_name = ntemp_sv_ascii_to_lower(tree->name);
+	const char *lowered_name = ntemp_sv_ascii_to_lower(bufsv_to_sv(tree->name));
 	if (zstr_includes_zstr(lowered_name, search)) {
 	  ansi_term_printfn("╟──◈ Index %zu", i);
 	  display_tree_short(i, "║      ");
