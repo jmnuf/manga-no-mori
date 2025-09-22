@@ -292,12 +292,13 @@ void display_tree_short(size_t i, const char *prefix) {
   Mori_Tree *tree = mori.items + i;
   String_View name = bufsv_to_sv(tree->name);
   String_View url = bufsv_to_sv(tree->url);
+  const int max_name_char_length = 35;
 
   if (!prefix) {
     ansi_term_printfn("Mori_Tree :: struct {");
     ansi_term_printfn("  .Index   = %zu;", i);
-    if (tree->name.length > 25) {
-      ansi_term_printfn("  .Name    = \"%.*s...\";", (int)name.count, name.data);
+    if (tree->name.length > max_name_char_length) {
+      ansi_term_printfn("  .Name    = \"%.*s...\";", max_name_char_length, name.data);
     } else {
       ansi_term_printfn("  .Name    = \""SV_Fmt"\";", SV_Arg(name));
     }
@@ -308,11 +309,12 @@ void display_tree_short(size_t i, const char *prefix) {
 
   ansi_term_printfn("%sMori_Tree :: struct {", prefix);
   ansi_term_printfn("%s  .Index   = %zu;", prefix, i);
-    if (tree->name.length > 25) {
-      ansi_term_printfn("%s  .Name    = \"%.*s...\";", prefix, (int)name.count, name.data);
-    } else {
-      ansi_term_printfn("%s  .Name    = \""SV_Fmt"\";", prefix, SV_Arg(name));
-    }
+  if (tree->name.length > max_name_char_length) {
+    // TODO: Actually split on a space or dash or colon as this can cut mid-word for not so nice views
+    ansi_term_printfn("%s  .Name    = \"%.*s...\";", prefix, max_name_char_length, name.data);
+  } else {
+    ansi_term_printfn("%s  .Name    = \""SV_Fmt"\";", prefix, SV_Arg(name));
+  }
   ansi_term_printfn("%s  .Chapter = %zu;", prefix, tree->chapter);
   ansi_term_printfn("%s}", prefix);
 }
@@ -732,9 +734,9 @@ int main(int argc, char **argv) {
   nob_minimal_log_level = NOB_WARNING;
 
   const char *morimori_file_path = get_morimori_file_path();
-  printf("Mori_Header :: ");
-  for (const byte_t *b = mori_header; b < mori_header + MORI_HEADER_SIZE; ++b) printf(" 0x%02x", *b);
-  printf("\n");
+  // printf("Mori_Header :: ");
+  // for (const byte_t *b = mori_header; b < mori_header + MORI_HEADER_SIZE; ++b) printf(" 0x%02x", *b);
+  // printf("\n");
 
   if (argc > 0) {
     char *arg = shift(argv, argc);
