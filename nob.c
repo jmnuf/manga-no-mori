@@ -17,6 +17,7 @@ typedef struct {
 #define comp_unit_add_input(unit, path) (unit)->input_paths[(unit)->input_paths_count++] = path
 
 bool build_demanded = false;
+bool build_debug = false;
 
 void usage(const char *program) {
   printf("Usage: %s [run|build]\n", program);
@@ -26,7 +27,9 @@ void usage(const char *program) {
 
 bool build_if_needed(Cmd *cmd, Comp_Unit *unit) {
   if (build_demanded || needs_rebuild(unit->output_path, unit->input_paths, unit->input_paths_count)) {
-    nob_log(NOB_INFO, "Rebuild needed for: '%s'", unit->output_path);
+    if (build_demanded) nob_log(NOB_INFO, "Rebuild demanded for: '%s'", unit->output_path);
+    else nob_log(NOB_INFO, "Rebuild needed for: '%s'", unit->output_path);
+
     nob_cc(cmd);
     if (unit->compile_only) {
       unit->compile_only = false;
@@ -34,9 +37,10 @@ bool build_if_needed(Cmd *cmd, Comp_Unit *unit) {
     }
     nob_cc_output(cmd, unit->output_path);
     for (size_t i = 0; i < unit->input_paths_count; ++i) {
+      if (!unit->compile_only && sv_end_with(sv_from_cstr(unit->input_paths[i]), ".h")) continue;
       nob_cc_inputs(cmd, unit->input_paths[i]);
     }
-    nob_cmd_append(cmd, "-ggdb");
+    if (build_debug) nob_cmd_append(cmd, "-ggdb");
     unit->input_paths_count = 0;
     return cmd_run(cmd);
   }
@@ -58,6 +62,11 @@ int main(int argc, char **argv) {
     }
     if (streq(arg, "build")) {
       build_demanded = true;
+      continue;
+    }
+
+    if (streq(arg, "-g")) {
+      build_debug = true;
       continue;
     }
     
