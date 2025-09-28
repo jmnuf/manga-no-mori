@@ -82,6 +82,15 @@ bool get_v0_mori_tree_from_bytes(String_Builder *buffer, size_t *offset, Mori_Tr
   }
   size_t bytes_len = buffer->count - (*offset);
   if (bytes_len == 0) return false;
+  // nob_log(INFO, "Reading leftover bytes: %zu", bytes_len);
+  if (bytes_len == 1) {
+    char b = buffer->items[*offset];
+    nob_log(INFO, "Hit a single byte: %d -> '%c'", b, b);
+    if (b == '\n') {
+      buffer->count--;
+      return false;
+    }
+  }
 
   union {
     char buf[sizeof(uint32_t)];
@@ -214,7 +223,7 @@ bool read_morimori_file(String_Builder *sb, const char *morimori_file_path) {
       Mori_Tree tree = {0};
       bool errored = false;
       if (!get_v0_mori_tree_from_bytes(sb, &offset, &tree, &errored)) {
-	if (errored) nob_log(NOB_ERROR, "Failed to read mori tree bytes");
+	if (errored) nob_log(NOB_ERROR, "Failed to read v0 mori tree bytes");
 	return !errored;
       }
       if (tree.name.length) da_append(&mori, tree);
