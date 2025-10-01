@@ -101,11 +101,11 @@ void ansi_term_move_cursor(int x, int y) {
   }
 
   printf(ansi_code);
+  nob_temp_rewind(save_point);
 }
 
 bool ansi_term_read(Nob_String_View *read_data) {
   static char buf[ANSI_TERM_READ_BUFFER_SIZE];
-  static size_t offset = 0;
   errno = 0;
   int n = read(STDIN_FILENO, buf, ANSI_TERM_READ_BUFFER_SIZE);
 
