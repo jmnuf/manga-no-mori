@@ -5,9 +5,19 @@
 #include <errno.h>
 #include <string.h>
 
-#define NOB_FREE(ptr) if (ptr) free(ptr)
+
+#define NOB_FREE(ptr) do { if (ptr) { free((void*)ptr); ptr = NULL; } } while(0)
 #define NOB_STRIP_PREFIX
 #include "nob.h"
+
+#undef nob_sb_free
+#undef sb_free
+#define nob_sb_free(sb) sb_free(&sb)
+
+void sb_free(Nob_String_Builder *sb) {
+  if (sb->items) free(sb->items);
+  memset(sb, 0, sizeof(Nob_String_Builder));
+}
 
 #include "ext_sv.h"
 #include "ansi_term.h"
@@ -18,7 +28,7 @@
 
 #define list_remove(l, index)                                \
 do {                                                         \
-  if ((l)->count > 0 && index < (l)->count && index >= 0) {  \
+  if ((l)->count > 0 && index < (l)->count) {  \
     for (size_t i = index; i < (l)->count - 1; ++i) {        \
       (l)->items[i] = (l)->items[i + 1];                     \
     }                                                        \
@@ -64,7 +74,7 @@ typedef struct {
 } Mori_Mori;
 
 #define MORI_HEADER_SIZE 6
-const byte_t const mori_header[MORI_HEADER_SIZE] = { 'M', 'O', 'R', 'I', 69, MORI_VERSION };
+const byte_t mori_header[MORI_HEADER_SIZE] = { 'M', 'O', 'R', 'I', 69, MORI_VERSION };
 
 Mori_Mori mori = {0};
 
@@ -98,7 +108,6 @@ bool get_v0_mori_tree_from_bytes(String_Builder *buffer, size_t *offset, Mori_Tr
   } num;
   num.val = 0;
 
-  byte_t *bytes = buffer->items + *offset;
   for (size_t i = 0; i < sizeof(uint32_t); ++i) {
     if (bytes_len == 0) {
       nob_log(ERROR, "Malformed Mori Tree: Expected name length as a ui32 at the start of a mori_tree");
@@ -108,7 +117,7 @@ bool get_v0_mori_tree_from_bytes(String_Builder *buffer, size_t *offset, Mori_Tr
     num.buf[i] = buffer->items[(*offset) + i];
     bytes_len--;
   }
-  memcpy(buffer->items + (*offset), buffer->items + (*offset + sizeof(uint32_t)), bytes_len);
+  memmove(buffer->items + (*offset), buffer->items + (*offset + sizeof(uint32_t)), bytes_len);
   buffer->count -= sizeof(uint32_t);
 
   uint32_t name_len = num.val;
@@ -133,7 +142,7 @@ bool get_v0_mori_tree_from_bytes(String_Builder *buffer, size_t *offset, Mori_Tr
     num.buf[i] = buffer->items[(*offset) + i];
     bytes_len--;
   }
-  memcpy(buffer->items + (*offset), buffer->items + (*offset + sizeof(uint32_t)), bytes_len);
+  memmove(buffer->items + (*offset), buffer->items + (*offset + sizeof(uint32_t)), bytes_len);
   buffer->count -= sizeof(uint32_t);
 
   uint32_t url_len = num.val;
@@ -157,12 +166,12 @@ bool get_v0_mori_tree_from_bytes(String_Builder *buffer, size_t *offset, Mori_Tr
     num.buf[i] = buffer->items[(*offset) + i];
     bytes_len--;
   }
-  memcpy(buffer->items + (*offset), buffer->items + (*offset + sizeof(uint32_t)), bytes_len);
+  memmove(buffer->items + (*offset), buffer->items + (*offset + sizeof(uint32_t)), bytes_len);
   buffer->count -= sizeof(uint32_t);
 
   uint32_t chapters_count = num.val;
   tree->chapter = chapters_count;
-  nob_log(INFO, "    Chapter: %zu", tree->chapter);
+  nob_log(INFO, "    Chapter: %u", tree->chapter);
 
   num.val = 0;
   for (size_t i = 0; i < sizeof(uint32_t); ++i) {
@@ -174,12 +183,12 @@ bool get_v0_mori_tree_from_bytes(String_Builder *buffer, size_t *offset, Mori_Tr
     num.buf[i] = buffer->items[(*offset) + i];
     bytes_len--;
   }
-  memcpy(buffer->items + (*offset), buffer->items + (*offset + sizeof(uint32_t)), bytes_len);
+  memmove(buffer->items + (*offset), buffer->items + (*offset + sizeof(uint32_t)), bytes_len);
   buffer->count -= sizeof(uint32_t);
 
   uint32_t volumes_count = num.val;
   tree->volume = volumes_count;
-  nob_log(INFO, "    Volume: %zu", tree->volume);
+  nob_log(INFO, "    Volume: %u", tree->volume);
 
   return true;
 }
@@ -212,7 +221,7 @@ bool read_morimori_file(String_Builder *sb, const char *morimori_file_path) {
     return false;
   }
 
-  memcpy(sb->items, sb->items + MORI_HEADER_SIZE, sb->count - MORI_HEADER_SIZE);
+  memmove(sb->items, sb->items + MORI_HEADER_SIZE, sb->count - MORI_HEADER_SIZE);
   sb->count -= MORI_HEADER_SIZE;
   size_t offset = 0;
 
@@ -264,10 +273,11 @@ bool write_morimori_file(const char *file_path) {
 
   result = write_entire_file(file_path, content_sb.items, content_sb.count);
 
-  sb_free(content_sb);
+  sb_free(&content_sb);
   return result;
 }
 
+// TODO: Also pass length so the user can go from the end by providing a negative index
 bool read_index_from_stdin(const char *prompt, size_t *value) {
   const size_t cap = 1024;
   char buf[cap];
@@ -281,8 +291,8 @@ bool read_index_from_stdin(const char *prompt, size_t *value) {
     nob_log(ERROR, "Read failed: %s", strerror(errno));
     return false;
   }
-  size_t len = n >= cap ? cap : n;
-  buf[n >= cap ? cap - 1 : n] = 0;
+  // TODO: Transform it to an sv and trim it and handle negative sign
+  buf[(size_t)n >= cap ? cap - 1 : (size_t)n] = 0;
 
   if (buf[0] == 'q') return false;
 
@@ -300,8 +310,7 @@ bool read_index_from_stdin(const char *prompt, size_t *value) {
 void display_tree_short(size_t i, const char *prefix) {
   Mori_Tree *tree = mori.items + i;
   String_View name = bufsv_to_sv(tree->name);
-  String_View url = bufsv_to_sv(tree->url);
-  const int max_name_char_length = 35;
+  const size_t max_name_char_length = 35;
 
   if (!prefix) {
     ansi_term_printfn("Mori_Tree :: struct {");
@@ -359,9 +368,10 @@ void display_tree_full(size_t i, const char *prefix) {
   ansi_term_printfn("%s}", prefix);
 }
 
-void display_mori_tree_short_list() {
+#define display_mori_tree_short_list() display_mori_tree_short_list_offset(0)
+void display_mori_tree_short_list_offset(size_t offset) {
   ansi_term_printn("╓─<Your Manga Forest>");
-  for (size_t i = 0; i < mori.count; ++i) {
+  for (size_t i = offset; i < mori.count; ++i) {
     ansi_term_printfn("╟─ Index %zu", i);
     display_tree_short(i, "║    ");
   }
@@ -482,14 +492,14 @@ bool handle_action(String_Builder *sb, char action) {
       printf("Chapter :: ");
       flush();
       n = read(STDIN_FILENO, buf, cap);
-      buf[n >= cap ? cap - 1 : n] = 0;
+      buf[(size_t)n >= cap ? cap - 1 : (size_t)n] = 0;
       tree.chapter = (uint32_t) atoi(buf);
 
       if (tree.chapter > 4) {
 	printf("Volume :: ");
 	flush();
 	n = read(STDIN_FILENO, buf, cap);
-	buf[n >= cap ? cap - 1 : n] = 0;
+	buf[(size_t)n >= cap ? cap - 1 : (size_t)n] = 0;
 	tree.volume = (uint32_t) atoi(buf);
       } else {
 	tree.volume = 1;
@@ -509,9 +519,6 @@ bool handle_action(String_Builder *sb, char action) {
       }
 
       Mori_Tree *tree = mori.items + i;
-      const size_t cap = 256;
-      char buf[cap];
-      int n = 0;
       size_t save_point = nob_temp_save();
       String_View read_data = {0}, trimmed = {0};
       char *last_error = NULL;
@@ -707,7 +714,7 @@ bool handle_action(String_Builder *sb, char action) {
     }
 
     // Free memory
-    free((void*)sv.data);
+    NOB_FREE(sv.data);
     temp_rewind(save_point);
 
     ansi_term_printfn("╙ Mori_Tree found[%zu];", found);
@@ -742,6 +749,7 @@ bool load_morimori_file(String_Builder *sb, const char *file_path) {
 }
 
 int main(int argc, char **argv) {
+  int result = 0;
   shift(argv, argc);
 
   nob_minimal_log_level = NOB_WARNING;
@@ -756,26 +764,26 @@ int main(int argc, char **argv) {
     if (strcmp(arg, "version") == 0) {
       printf("Program: v"MORI_FULL_VERSION"\n");
       printf("mori-mori: 0x%02x\n", MORI_VERSION);
-      return 0;
+      nob_return_defer(0);
     }
 
     if (strcmp(arg, "list") == 0) {
       load_morimori_file(&mori.buffer, morimori_file_path);
       display_mori_tree_short_list();
-      return 0;
+      nob_return_defer(0);
     }
 
     if (strcmp(arg, "list-full") == 0) {
       load_morimori_file(&mori.buffer, morimori_file_path);
       display_mori_tree_full_list();
-      return 0;
+      nob_return_defer(0);
     }
 
     if (strcmp(arg, "search") == 0) {
       if (argc == 0) {
 	nob_log(ERROR, "Missing search term(s)");
 	printf("Usage: mori search <search-terms...>\n");
-	return 1;
+	nob_return_defer(1);
       }
 
       load_morimori_file(&mori.buffer, morimori_file_path);
@@ -803,7 +811,7 @@ int main(int argc, char **argv) {
       ansi_term_printfn("╙ Mori_Tree found[%zu];", found);
       flush();
 
-      return 0;
+      nob_return_defer(0);
     }
   }
 
@@ -814,7 +822,6 @@ int main(int argc, char **argv) {
   ansi_term_start();
 
   char action = 0;
-  int ch;
   while (true) {
     ansi_term_clear_screen();
 
@@ -826,15 +833,17 @@ int main(int argc, char **argv) {
       if (!ansi_term_read_line(&sv)) {
 	printf(ANSI_TERM_DISABLE_ALT_BUFFER);
 	flush();
-	return 1;
+	nob_return_defer(1);
       }
 
       String_View trimmed = sv_trim_left(sv);
       if (trimmed.count == 0) {
 	action = 0;
 	continue;
+      } else {
+	action = trimmed.data[0];
       }
-      action = trimmed.data[0];
+      NOB_FREE(sv.data);
     }
 
     if (handle_action(&mori.buffer, action)) break;
@@ -848,8 +857,10 @@ int main(int argc, char **argv) {
   } else {
     nob_log(ERROR, "Failed to save your 森!");
   }
-  
-  return 0;
+
+defer:
+  sb_free(&mori.buffer);
+  return result;
 }
 
 #define ANSI_TERM_IMPLEMENTATION
